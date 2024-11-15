@@ -1,0 +1,189 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, minimum-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <title>Dynamic User Location Map with Nearby Places</title>
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.3/dist/leaflet.css" />
+  <script src="https://unpkg.com/leaflet@1.9.3/dist/leaflet.js"></script>
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css" />
+  <style>
+    #map {
+      height: 100vh;
+      width: 100%;
+    }
+
+    .recenter-button {
+      position: absolute;
+      bottom: 30px;
+      right: 30px;
+      background: white;
+      border: 2px solid #4CAF50;
+      border-radius: 50%;
+      width: 50px;
+      height: 50px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      cursor: pointer;
+      z-index: 1000;
+      box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+    }
+
+    .recenter-button:hover {
+      background: #4CAF50;
+      color: white;
+    }
+
+    .leaflet-control-layers {
+      position: absolute !important;
+      top: 10px !important;
+      left: 10px !important;
+    }
+
+    .leaflet-control-zoom {
+      position: absolute !important;
+      top: 80px !important;
+      left: 10px !important;
+    }
+  </style>
+</head>
+<body>
+  <div id="map"></div>
+  <div class="recenter-button" onclick="recenterMap()">
+    <i class="fa-solid fa-location-arrow"></i>
+  </div>
+
+  <script>
+    let map, userMarker, radiusCircle, userLat, userLng;
+
+    // Define map layers
+    const defaultLayer = L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+      maxZoom: 19,
+      attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors',
+    });
+
+    const satelliteLayer = L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}', {
+      attribution: '&copy; <a href="https://www.esri.com/">Esri</a>, NASA, USGS, ESA',
+    });
+
+    const hybridLabels = L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/Reference/World_Boundaries_and_Places/MapServer/tile/{z}/{y}/{x}', {
+      attribution: '&copy; <a href="https://www.esri.com/">Esri</a>',
+    });
+
+    const hybridLayer = L.layerGroup([satelliteLayer, hybridLabels]);
+
+    // Initialize map
+    document.addEventListener("DOMContentLoaded", () => {
+      map = L.map('map', {
+        center: [0, 0],
+        zoom: 15,
+        layers: [defaultLayer]
+      });
+
+      // Add Layer Control
+      const layerControl = L.control.layers(
+        { 'Default View': defaultLayer, 'Satellite View with Labels': hybridLayer }
+      ).addTo(map);
+
+      map.zoomControl.setPosition('topleft');
+
+      // Geolocation logic
+      if (navigator.geolocation) {
+        navigator.geolocation.watchPosition(
+          position => {
+            const { latitude, longitude } = position.coords;
+            updateUserLocation(latitude, longitude);
+          },
+          error => {
+            console.error('Error retrieving location:', error);
+            alert('Location permissions are needed for full functionality.');
+          },
+          { enableHighAccuracy: true, maximumAge: 0 }
+        );
+      } else {
+        alert('Geolocation is not supported by your browser.');
+      }
+    });
+
+    function updateUserLocation(lat, lng) {
+      userLat = lat;
+      userLng = lng;
+
+      const userLocation = [lat, lng];
+      map.setView(userLocation);
+
+      if (!userMarker) {
+        userMarker = L.marker(userLocation).addTo(map).bindPopup('You are here!')
+          .on('mouseover', function () {
+            this.openPopup();  // Show popup on hover
+          })
+          .on('mouseout', function () {
+            this.closePopup();  // Close popup when mouse leaves
+          });
+      } else {
+        userMarker.setLatLng(userLocation);
+      }
+
+      if (!radiusCircle) {
+        radiusCircle = L.circle(userLocation, {
+          radius: 1000,
+          color: 'red',
+          fillColor: '#f03',
+          fillOpacity: 0.2,
+        }).addTo(map);
+      } else {
+        radiusCircle.setLatLng(userLocation);
+      }
+
+      findNearbyPlaces(lat, lng);
+    }
+
+    // Function to recenter the map
+    function recenterMap() {
+      if (userLat && userLng) {
+        map.setView([userLat, userLng], 15);
+      } else {
+        alert('Location not available yet. Please wait for detection.');
+      }
+    }
+
+    // Use Overpass API to fetch nearby amenities within 1km radius
+    function findNearbyPlaces(lat, lng) {
+      const query = `
+        [out:json];
+        (
+          node["amenity"](around:1000, ${lat}, ${lng});
+          way["amenity"](around:1000, ${lat}, ${lng});
+          relation["amenity"](around:1000, ${lat}, ${lng});
+        );
+        out center;`;
+
+      fetch(`https://overpass-api.de/api/interpreter?data=${encodeURIComponent(query)}`)
+        .then(response => response.json())
+        .then(data => {
+          data.elements.forEach(element => {
+            const { lat, lon, tags } = element;
+            const name = tags.name || 'Unnamed Place';
+            const amenityType = tags.amenity || 'Amenity';
+
+            // Create a marker for the nearby place
+            const marker = L.marker([lat, lon])
+              .addTo(map)
+              .bindPopup(`<b>${name}</b><br>${amenityType}`)
+              .on('mouseover', function () {
+                this.openPopup();  // Show the popup on hover
+              })
+              .on('mouseout', function () {
+                this.closePopup();  // Close the popup when the cursor moves away
+              });
+          });
+        })
+        .catch(error => {
+          console.error('Error fetching nearby places:', error);
+          alert('Could not load nearby places. Please check your internet connection.');
+        });
+    }
+  </script>
+</body>
+</html>
